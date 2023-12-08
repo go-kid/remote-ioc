@@ -1,6 +1,7 @@
 package remote_ioc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,6 +94,19 @@ func convertSpecialInterfaceValue(kind string, in reflect.Type, val any) (value 
 	return
 }
 
+func getPairs(ctx context.Context) map[string]any {
+	var m = make(map[string]any)
+	for v := reflect.ValueOf(ctx).Elem(); v.Type().String() != "context.emptyCtx"; v = v.FieldByName("Context").Elem().Elem() {
+		if v.Type().String() == "context.valueCtx" {
+			if v.FieldByName("key").Elem().Kind() == reflect.String {
+				key := fmt.Sprintf("%v", v.FieldByName("key"))
+				m[key] = fmt.Sprintf("%v", v.FieldByName("val"))
+			}
+		}
+	}
+	return m
+}
+
 func convertJsonValue(in reflect.Type, val any) (value reflect.Value, err error) {
 	value = reflectx.New(in)
 	if val == nil {
@@ -100,7 +114,7 @@ func convertJsonValue(in reflect.Type, val any) (value reflect.Value, err error)
 		return
 	}
 	if msl, ok := value.Interface().(json.Unmarshaler); ok {
-		err = msl.UnmarshalJSON([]byte(fmt.Sprintf("\"%s\"", val)))
+		err = msl.UnmarshalJSON([]byte(fmt.Sprintf("%#v", val)))
 		if err != nil {
 			return
 		}
