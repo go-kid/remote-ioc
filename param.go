@@ -56,7 +56,15 @@ func (p *param) Validate(in reflect.Type) error {
 }
 
 func (p *param) ToValue(in reflect.Type) (reflect.Value, error) {
-	value, err := convertJsonValue(in, p.Value, p.Order, "")
+	var (
+		value reflect.Value
+		err   error
+	)
+	if in.Kind() == reflect.Interface {
+		value, err = convertSpecialInterfaceValue(p.Kind, in, p.Value)
+	} else {
+		value, err = convertJsonValue(in, p.Value)
+	}
 	if err != nil {
 		err = &convertError{
 			param: p,
@@ -66,7 +74,26 @@ func (p *param) ToValue(in reflect.Type) (reflect.Value, error) {
 	return value, err
 }
 
-func convertJsonValue(in reflect.Type, val any, order int, path string) (value reflect.Value, err error) {
+func convertSpecialInterfaceValue(kind string, in reflect.Type, val any) (value reflect.Value, err error) {
+	if val == nil {
+		value = reflect.New(in).Elem()
+		return
+	}
+	switch kind {
+	case "error":
+		if s, ok := val.(string); ok {
+			value = reflect.ValueOf(errors.New(s))
+		} else {
+			err = errors.New(": value is not a string")
+		}
+	case "context.Context":
+	default:
+		err = errors.New(": unsupported interface type")
+	}
+	return
+}
+
+func convertJsonValue(in reflect.Type, val any) (value reflect.Value, err error) {
 	value = reflectx.New(in)
 	if val == nil {
 		value = fas.TernaryOp(in.Kind() == reflect.Pointer, value, value.Elem())
@@ -116,7 +143,7 @@ func convertJsonValue(in reflect.Type, val any, order int, path string) (value r
 			value = value.Elem()
 			err = reflectx.ForEachFieldV2(in, value, true, func(field reflect.StructField, value reflect.Value) error {
 				key := field.Tag.Get("json")
-				v, err := convertJsonValue(field.Type, vm[key], order, fmt.Sprintf("%s.%s", path, key))
+				v, err := convertJsonValue(field.Type, vm[key])
 				if err != nil {
 					return fmt.Errorf(".%s%v", key, err)
 				}
@@ -136,7 +163,7 @@ func convertJsonValue(in reflect.Type, val any, order int, path string) (value r
 			}
 			for i, item := range anies {
 				var v reflect.Value
-				v, err = convertJsonValue(nt, item, order, fmt.Sprintf("%s.[]%s", path, nt.String()))
+				v, err = convertJsonValue(nt, item)
 				if err != nil {
 					err = fmt.Errorf(".[%d]%s.$%d%v", value.Len(), nt.String(), i+1, err)
 					break
@@ -153,7 +180,7 @@ func convertJsonValue(in reflect.Type, val any, order int, path string) (value r
 			var values []reflect.Value
 			for i, item := range anies {
 				var v reflect.Value
-				v, err = convertJsonValue(nt, item, order, fmt.Sprintf("%s.[]%s", path, nt.String()))
+				v, err = convertJsonValue(nt, item)
 				if err != nil {
 					err = fmt.Errorf(".[]%s.$%d%v", nt.String(), i+1, err)
 					break
@@ -167,11 +194,18 @@ func convertJsonValue(in reflect.Type, val any, order int, path string) (value r
 
 	case reflect.Pointer:
 		var v reflect.Value
-		v, err = convertJsonValue(in.Elem(), val, order, path)
+		v, err = convertJsonValue(in.Elem(), val)
 		if err != nil {
 			return
 		}
 		value.Elem().Set(v)
+	case reflect.Interface: //only handle the interface of error
+		if s, ok := val.(string); ok {
+			value = value.Elem()
+			value.Set(reflect.ValueOf(errors.New(s)))
+		} else {
+			err = errors.New(": value is not a string")
+		}
 	default:
 		err = errors.New(": unsupported type")
 	}

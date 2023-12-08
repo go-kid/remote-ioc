@@ -11,6 +11,12 @@ import (
 	"reflect"
 )
 
+const (
+	routeHealth = "/health"
+	routeMeta   = "/meta"
+	routeMethod = "/component/%s/methods/%s"
+)
+
 type iocServer struct {
 	c  ServerConfig
 	r  registry.Registry
@@ -29,17 +35,17 @@ func (s *iocServer) Run() error {
 	e.HidePort = true
 	{
 		g := e.Group(s.c.RoutePrefix)
-		g.GET("/health", func(c echo.Context) error {
+		g.GET(routeHealth, func(c echo.Context) error {
 			return c.JSON(200, map[string]string{
 				"status": "ok",
 			})
 		})
-		g.GET("/registry/meta", func(c echo.Context) error {
-			var metas []*metaDTO
+		g.GET(routeMeta, func(c echo.Context) error {
+			var metas []*serverInfo
 			for _, component := range s.cs {
-				metas = append(metas, &metaDTO{
-					Name:    component.serviceId,
-					Methods: lo.Keys(component.mvm),
+				metas = append(metas, &serverInfo{
+					ServiceId: component.serviceId,
+					Methods:   lo.Keys(component.mvm),
 				})
 			}
 			return c.JSON(200, metas)
@@ -47,7 +53,7 @@ func (s *iocServer) Run() error {
 		for _, component := range s.cs {
 			for methodName, method := range component.mvm {
 				method := method
-				route := fmt.Sprintf("/component/%s/methods/%s", component.serviceId, methodName)
+				route := fmt.Sprintf(routeMethod, component.serviceId, methodName)
 				e.POST(route, func(c echo.Context) error {
 					return exportHandler(c, component, method)
 				})
@@ -121,6 +127,7 @@ func (s *iocServer) registerRemoteHandler() {
 		var methods []string
 		if export, ok := m.Raw.(defination.RemoteMethodExport); ok {
 			methods = export.ExportMethods()
+			methods = lo.Without(methods, "ExportMethods")
 		} else {
 			for i := 0; i < m.Type.NumMethod(); i++ {
 				if mi := m.Type.Method(i); mi.IsExported() {
@@ -131,24 +138,15 @@ func (s *iocServer) registerRemoteHandler() {
 
 		if exclude, ok := m.Raw.(defination.RemoteMethodExclude); ok {
 			methods = lo.Without(methods, exclude.ExcludeMethods()...)
+			methods = lo.Without(methods, "ExcludeMethods")
 		}
 
-		var methodReplacer map[string]string
-		if replace, ok := m.Raw.(defination.RemoteMethodReplace); ok {
-			methodReplacer = replace.ReplaceMethods()
-		}
 		methodMap := lo.SliceToMap(methods, func(item string) (string, reflect.Method) {
-			var name = item
-			if methodReplacer != nil {
-				if rep, ok := methodReplacer[item]; ok {
-					name = rep
-				}
-			}
 			method, ok := m.Type.MethodByName(item)
 			if !ok {
 				panic("invalid export method: " + item)
 			}
-			return name, method
+			return item, method
 		})
 
 		return &serviceComponent{
@@ -165,7 +163,7 @@ type serviceComponent struct {
 	mvm       map[string]reflect.Method
 }
 
-type metaDTO struct {
-	Name    string   `json:"name"`
-	Methods []string `json:"methods"`
+type serverInfo struct {
+	ServiceId string   `json:"service_id"`
+	Methods   []string `json:"methods"`
 }

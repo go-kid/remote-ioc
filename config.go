@@ -6,5 +6,5 @@ type ServerConfig struct {
 }
 
 type ClientConfig struct {
-	Hosts []string
+	Servers []ServerConfig
 }

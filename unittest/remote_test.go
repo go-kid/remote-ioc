@@ -1,151 +1,13 @@
 package unittest
 
 import (
-	"errors"
 	"github.com/go-kid/ioc"
 	"github.com/go-kid/ioc/app"
 	remote_ioc "github.com/go-kid/remote-ioc"
-	"github.com/samber/lo"
+	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
 )
-
-type ServerComponent interface {
-	Sum(base int, add ...int) int
-}
-
-type ServerComponentImpl struct {
-}
-
-func (s *ServerComponentImpl) RemoteServiceId() string {
-	return "MathServer"
-}
-
-//func (s *ServerComponentImpl) ExportMethods() []string {
-//	return []string{
-//		"SumI",
-//		"SumS",
-//		"SumF",
-//		"And",
-//		"SumSliceI",
-//		"SumArrayI",
-//		"SumSliceIV",
-//		"SumObj",
-//		"SumObjPtr",
-//		"SumTime",
-//		"SumTimePtr",
-//		"AddTime",
-//		"ConvertError",
-//	}
-//}
-
-//func (s *ServerComponentImpl) ExcludeMethods() []string {
-//	return []string{
-//		"SumI",
-//	}
-//}
-
-func (s *ServerComponentImpl) ReplaceMethods() map[string]string {
-	return map[string]string{
-		"SumI": "SumInt",
-	}
-}
-
-func (s *ServerComponentImpl) SumI(base, add int) int {
-	return base + add
-}
-
-func (s *ServerComponentImpl) SumS(base, add string) string {
-	return base + add
-}
-
-func (s *ServerComponentImpl) SumF(base, add float64) float64 {
-	return base + add
-}
-
-func (s *ServerComponentImpl) And(b1, b2 bool) bool {
-	return b1 && b2
-}
-
-func (s *ServerComponentImpl) SumSliceI(base int, add []int) int {
-	var result = base
-	for _, i := range add {
-		result += i
-	}
-	return result
-}
-
-func (s *ServerComponentImpl) SumArrayI(base int, add [3]int) int {
-	var result = base
-	for _, i := range add {
-		result += i
-	}
-	return result
-}
-
-func (s *ServerComponentImpl) SumSliceIV(base int, add ...int) int {
-	var result = base
-	for _, i := range add {
-		result += i
-	}
-	return result
-}
-
-type Obj struct {
-	Int    int    `json:"int"`
-	String string `json:"string"`
-	Subs   []*Sub `json:"subs"`
-}
-
-type Sub struct {
-	Float float64 `json:"float"`
-}
-
-func (s *ServerComponentImpl) SumObj(obj1, obj2 Obj) Obj {
-	return *s.SumObjPtr(&obj1, &obj2)
-}
-
-func (s *ServerComponentImpl) SumObjPtr(obj1, obj2 *Obj) *Obj {
-	lo.SumBy(obj1.Subs, func(item *Sub) float64 {
-		return item.Float
-	})
-	return &Obj{
-		Int:    s.SumI(obj1.Int, obj2.Int),
-		String: s.SumS(obj1.String, obj2.String),
-		Subs: []*Sub{
-			{
-				Float: lo.SumBy(obj1.Subs, func(item *Sub) float64 {
-					return item.Float
-				}) + lo.SumBy(obj2.Subs, func(item *Sub) float64 {
-					return item.Float
-				}),
-			},
-		},
-	}
-}
-
-func (s *ServerComponentImpl) SumTime(t1, t2 time.Time) time.Time {
-	return t1.AddDate(t2.Year(), int(t2.Month()), t2.Day())
-}
-
-func (s *ServerComponentImpl) SumTimePtr(t1, t2 *time.Time) time.Time {
-	return t1.AddDate(t2.Year(), int(t2.Month()), t2.Day())
-}
-
-func (s *ServerComponentImpl) AddTime(t1 time.Time, duration time.Duration) time.Time {
-	return t1.Add(duration)
-}
-
-func (s *ServerComponentImpl) ConvertError(msg string) (string, error) {
-	if msg == "" {
-		return "ok", nil
-	}
-	return "", errors.New(msg)
-}
-
-type ClientApp struct {
-	C ServerComponent `remote:""`
-}
 
 func TestRemoteIOC(t *testing.T) {
 	var s = &ServerComponentImpl{}
@@ -156,5 +18,73 @@ func TestRemoteIOC(t *testing.T) {
 			RoutePrefix: "",
 		}),
 	)
-	time.Sleep(time.Hour)
+
+	var c = &ClientApp{}
+	ioc.RunTest(t,
+		app.SetComponents(c, &ServerComponentInvoker{}),
+		remote_ioc.Remote(remote_ioc.ClientConfig{
+			Servers: []remote_ioc.ServerConfig{
+				{
+					Addr:        "http://localhost:8888",
+					RoutePrefix: "",
+				},
+			},
+		}),
+	)
+	t.Run("SumI", func(t *testing.T) {
+		assert.Equal(t, c.C.SumI(1, 2), s.SumI(1, 2))
+	})
+	t.Run("SumS", func(t *testing.T) {
+		assert.Equal(t, c.C.SumS("a", "b"), s.SumS("a", "b"))
+	})
+	t.Run("SumF", func(t *testing.T) {
+		assert.Equal(t, c.C.SumF(1.2, 3.4), s.SumF(1.2, 3.4))
+	})
+	t.Run("And", func(t *testing.T) {
+		assert.Equal(t, c.C.And(true, false), s.And(true, false))
+	})
+	t.Run("SumSliceI", func(t *testing.T) {
+		assert.Equal(t, c.C.SumSliceI(1, []int{2, 3}), s.SumSliceI(1, []int{2, 3}))
+	})
+	t.Run("SumArrayI", func(t *testing.T) {
+		assert.Equal(t, c.C.SumArrayI(1, [3]int{2, 3, 4}), s.SumArrayI(1, [3]int{2, 3, 4}))
+	})
+	t.Run("SumSliceIV", func(t *testing.T) {
+		assert.Equal(t, c.C.SumSliceIV(1, 2, 3), s.SumSliceIV(1, 2, 3))
+	})
+	obj1 := Obj{
+		Int:    1,
+		String: "a",
+		Subs:   []*Sub{},
+	}
+	obj2 := Obj{
+		Int:    2,
+		String: "b",
+		Subs:   []*Sub{},
+	}
+	t.Run("SumObj", func(t *testing.T) {
+		assert.Equal(t, c.C.SumObj(obj1, obj2), s.SumObj(obj1, obj2))
+	})
+	t.Run("SumObjPtr", func(t *testing.T) {
+		assert.Equal(t, c.C.SumObjPtr(&obj1, &obj2), s.SumObjPtr(&obj1, &obj2))
+	})
+	time1 := time.Now()
+	time2 := time.Hour * 40
+	t.Run("", func(t *testing.T) {
+		assert.Equal(t, c.C.AddTime(time1, time2).Second(), s.AddTime(time1, time2).Second())
+	})
+	t.Run("", func(t *testing.T) {
+		assert.Equal(t, c.C.AddTimePtr(&time1, &time2).Second(), s.AddTimePtr(&time1, &time2).Second())
+	})
+	t.Run("ConvertError", func(t *testing.T) {
+		msg := "hello"
+		result, err := c.C.ConvertError(msg)
+		assert.Equal(t, result, "")
+		assert.Equal(t, err.Error(), msg)
+	})
+	t.Run("ConvertNilError", func(t *testing.T) {
+		result, err := c.C.ConvertError("")
+		assert.Equal(t, result, "ok")
+		assert.NoError(t, err)
+	})
 }

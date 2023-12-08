@@ -13,6 +13,9 @@ func Handle(c ServerConfig) app.SettingOption {
 
 func Remote(c ClientConfig) app.SettingOption {
 	return func(s *app.App) {
-		s.Registry.Register()
+		s.Registry.Register(&iocClient{
+			c: c,
+			r: s.Registry,
+		})
 	}
 }
