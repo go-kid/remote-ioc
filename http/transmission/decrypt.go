@@ -1,4 +1,4 @@
-package remote_ioc
+package transmission
 
 import (
 	"context"
@@ -7,104 +7,68 @@ import (
 	"fmt"
 	"github.com/go-kid/ioc/util/fas"
 	"github.com/go-kid/ioc/util/reflectx"
+	"github.com/go-kid/remote-ioc/http/dto"
 	"reflect"
 )
 
-type payload struct {
-	Params []*param `json:"params"`
-}
+type DeserializationFilter func(p *dto.Param, inType reflect.Type) (reflect.Value, bool, error)
 
-type validateError struct {
-	Msg               string `json:"msg"`
-	RequiredParamKind string `json:"required_param_kind"`
-	RequestParamKind  string `json:"request_param_kind"`
-	ParamOrder        int    `json:"param_order"`
-	Value             any    `json:"value"`
-}
-
-func (e *validateError) Error() string {
-	marshal, _ := json.Marshal(e)
-	return string(marshal)
-}
-
-type convertError struct {
-	*param `json:",inline"`
-	Err    string `json:"error"`
-}
-
-func (e *convertError) Error() string {
-	marshal, _ := json.Marshal(e)
-	return string(marshal)
-}
-
-type param struct {
-	Order int    `json:"order"`
-	Kind  string `json:"kind"`
-	Value any    `json:"value"`
-}
-
-func (p *param) Validate(in reflect.Type) error {
-	if in.Kind().String() != p.Kind {
-		return &validateError{
-			Msg:               "invalid parameter type",
-			RequiredParamKind: in.Kind().String(),
-			RequestParamKind:  p.Kind,
-			ParamOrder:        p.Order,
-			Value:             p.Value,
-		}
-	}
-	return nil
-}
-
-func (p *param) ToValue(in reflect.Type) (reflect.Value, error) {
-	var (
-		value reflect.Value
-		err   error
-	)
+func DecryptParam(p *dto.Param, in reflect.Type, filters []DeserializationFilter) (value reflect.Value, err error) {
+	filters = append(filters, defaultDeserializationFilters...)
 	if in.Kind() == reflect.Interface {
-		value, err = convertSpecialInterfaceValue(p.Kind, in, p.Value)
+		var find bool
+		for _, filter := range filters {
+			value, find, err = filter(p, in)
+			if err != nil {
+				return value, err
+			}
+			if find {
+				break
+			}
+		}
+		if !find {
+			err = fmt.Errorf("decrypt interface \"%s\" faild: not found supported deserialization filter", in.Kind())
+		}
 	} else {
 		value, err = convertJsonValue(in, p.Value)
 	}
 	if err != nil {
-		err = &convertError{
-			param: p,
+		err = &dto.ConvertError{
+			Param: p,
 			Err:   fmt.Sprintf("parameter[%d]%s", p.Order, err),
 		}
 	}
 	return value, err
 }
 
-func convertSpecialInterfaceValue(kind string, in reflect.Type, val any) (value reflect.Value, err error) {
-	if val == nil {
-		value = reflect.New(in).Elem()
-		return
-	}
-	switch kind {
-	case "error":
-		if s, ok := val.(string); ok {
-			value = reflect.ValueOf(errors.New(s))
-		} else {
-			err = errors.New(": value is not a string")
-		}
-	case "context.Context":
-	default:
-		err = errors.New(": unsupported interface type")
+var defaultDeserializationFilters = []DeserializationFilter{
+	defaultContextDeserializationFilter,
+	defaultErrorDeserializationFilter,
+}
+
+var defaultContextDeserializationFilter DeserializationFilter = func(p *dto.Param, inType reflect.Type) (val reflect.Value, ok bool, err error) {
+	ok = p.Kind == "context.Context"
+	if ok {
+		val = reflect.ValueOf(context.Background())
+		ok = true
 	}
 	return
 }
 
-func getPairs(ctx context.Context) map[string]any {
-	var m = make(map[string]any)
-	for v := reflect.ValueOf(ctx).Elem(); v.Type().String() != "context.emptyCtx"; v = v.FieldByName("Context").Elem().Elem() {
-		if v.Type().String() == "context.valueCtx" {
-			if v.FieldByName("key").Elem().Kind() == reflect.String {
-				key := fmt.Sprintf("%v", v.FieldByName("key"))
-				m[key] = fmt.Sprintf("%v", v.FieldByName("val"))
-			}
-		}
+var defaultErrorDeserializationFilter DeserializationFilter = func(p *dto.Param, inType reflect.Type) (val reflect.Value, ok bool, err error) {
+	ok = p.Kind == "error"
+	if !ok {
+		return
 	}
-	return m
+	if p.Value == nil {
+		val = reflect.New(inType).Elem()
+	} else if s, ok := p.Value.(string); ok {
+		//val = reflect.ValueOf(errors.New(s))
+		err = errors.New(s)
+	} else {
+		err = errors.New(": value is not a string")
+	}
+	return
 }
 
 func convertJsonValue(in reflect.Type, val any) (value reflect.Value, err error) {

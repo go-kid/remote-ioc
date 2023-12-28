@@ -1,24 +1,22 @@
-package remote_ioc
+package server
 
 import (
 	"fmt"
 	"github.com/go-kid/ioc/registry"
 	"github.com/go-kid/ioc/scanner/meta"
 	"github.com/go-kid/remote-ioc/defination"
+	"github.com/go-kid/remote-ioc/http/constant"
+	"github.com/go-kid/remote-ioc/http/dto"
+	"github.com/go-kid/remote-ioc/http/transmission"
 	"github.com/labstack/echo/v4"
 	"github.com/samber/lo"
 	"log"
 	"reflect"
-)
-
-const (
-	routeHealth = "/health"
-	routeMeta   = "/meta"
-	routeMethod = "/component/%s/methods/%s"
+	"sort"
 )
 
 type iocServer struct {
-	c  ServerConfig
+	c  Config
 	r  registry.Registry
 	cs []*serviceComponent
 }
@@ -35,17 +33,21 @@ func (s *iocServer) Run() error {
 	e.HidePort = true
 	{
 		g := e.Group(s.c.RoutePrefix)
-		g.GET(routeHealth, func(c echo.Context) error {
+		g.GET(constant.RouteHealth, func(c echo.Context) error {
 			return c.JSON(200, map[string]string{
 				"status": "ok",
 			})
 		})
-		g.GET(routeMeta, func(c echo.Context) error {
-			var metas []*serverInfo
+		g.GET(constant.RouteMeta, func(c echo.Context) error {
+			var metas []*dto.ServerInfo
 			for _, component := range s.cs {
-				metas = append(metas, &serverInfo{
+				keys := lo.Keys(component.mvm)
+				sort.Slice(keys, func(i, j int) bool {
+					return keys[i] < keys[j]
+				})
+				metas = append(metas, &dto.ServerInfo{
 					ServiceId: component.serviceId,
-					Methods:   lo.Keys(component.mvm),
+					Methods:   keys,
 				})
 			}
 			return c.JSON(200, metas)
@@ -53,9 +55,9 @@ func (s *iocServer) Run() error {
 		for _, component := range s.cs {
 			for methodName, method := range component.mvm {
 				method := method
-				route := fmt.Sprintf(routeMethod, component.serviceId, methodName)
+				route := fmt.Sprintf(constant.RouteMethod, component.serviceId, methodName)
 				e.POST(route, func(c echo.Context) error {
-					return exportHandler(c, component, method)
+					return component.exportHandler(c, method)
 				})
 			}
 		}
@@ -68,57 +70,6 @@ func (s *iocServer) Run() error {
 		)
 	}()
 	return nil
-}
-
-func exportHandler(c echo.Context, component *serviceComponent, method reflect.Method) error {
-	var body = &payload{}
-	err := c.Bind(body)
-	if err != nil {
-		return err
-	}
-	var values = make([]reflect.Value, method.Type.NumIn())
-	values[0] = component.m.Value
-	for _, p := range body.Params {
-		in := method.Type.In(p.Order)
-		err = p.Validate(in)
-		if err != nil {
-			return c.JSON(400, err)
-		}
-		values[p.Order], err = p.ToValue(in)
-		if err != nil {
-			return c.JSON(400, err)
-		}
-	}
-	var resultValues []reflect.Value
-	if method.Type.IsVariadic() {
-		resultValues = method.Func.CallSlice(values)
-	} else {
-		resultValues = method.Func.Call(values)
-	}
-
-	var results []*param
-	for i := 0; i < method.Type.NumOut(); i++ {
-		out := method.Type.Out(i)
-		result := convertResult(i, out, resultValues[i])
-		results = append(results, result)
-	}
-	return c.JSON(200, &payload{Params: results})
-}
-
-func convertResult(order int, out reflect.Type, result reflect.Value) *param {
-	value := result.Interface()
-	kind := result.Kind().String()
-	if out.String() == "error" {
-		kind = out.String()
-		if value != nil {
-			value = value.(error).Error()
-		}
-	}
-	return &param{
-		Order: order,
-		Kind:  kind,
-		Value: value,
-	}
 }
 
 func (s *iocServer) registerRemoteHandler() {
@@ -161,9 +112,54 @@ type serviceComponent struct {
 	m         *meta.Meta
 	serviceId string
 	mvm       map[string]reflect.Method
+	sFilters  []SerializationFilter
+	dsFilters []DeserializationFilter
 }
 
-type serverInfo struct {
-	ServiceId string   `json:"service_id"`
-	Methods   []string `json:"methods"`
+func (s *serviceComponent) exportHandler(c echo.Context, method reflect.Method) error {
+	var body = &dto.Payload{}
+	err := c.Bind(body)
+	if err != nil {
+		return err
+	}
+	var values = make([]reflect.Value, method.Type.NumIn())
+	values[0] = s.m.Value
+	for _, p := range body.Params {
+		in := method.Type.In(p.Order)
+		err = p.Validate(in)
+		if err != nil {
+			return c.JSON(400, err)
+		}
+		values[p.Order], err = transmission.DecryptParam(p, in, s.dsFilters)
+		if err != nil {
+			return c.JSON(400, err)
+		}
+	}
+	var resultValues []reflect.Value
+	if method.Type.IsVariadic() {
+		resultValues = method.Func.CallSlice(values)
+	} else {
+		resultValues = method.Func.Call(values)
+	}
+	payload, err := s.buildResponseParam(method, resultValues)
+	if err != nil {
+		return c.JSON(400, err)
+	}
+
+	return c.JSON(200, payload)
+}
+
+func (s *serviceComponent) buildResponseParam(method reflect.Method, values []reflect.Value) (*dto.Payload, error) {
+	var params []*dto.Param
+	for i := 0; i < method.Type.NumOut(); i++ {
+		out := method.Type.Out(i)
+		param, err := transmission.EncryptParam(i+1, out, values[i].Interface(), s.sFilters)
+		if err != nil {
+			return nil, err
+		}
+		params = append(params, param)
+		//result := convertResult(i+1, out, values[i])
+		//params = append(params, result)
+	}
+	return &dto.Payload{Params: params}, nil
 }

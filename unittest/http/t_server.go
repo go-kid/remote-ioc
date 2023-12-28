@@ -1,6 +1,7 @@
-package unittest
+package http
 
 import (
+	"context"
 	"errors"
 	"github.com/samber/lo"
 	"time"
@@ -19,6 +20,7 @@ type ServerComponent interface {
 	AddTime(t1 time.Time, duration time.Duration) time.Time
 	AddTimePtr(t1 *time.Time, duration *time.Duration) time.Time
 	ConvertError(msg string) (string, error)
+	WithContext(ctx context.Context) string
 }
 
 type ServerComponentImpl struct {
@@ -138,4 +140,8 @@ func (s *ServerComponentImpl) ConvertError(msg string) (string, error) {
 		return "ok", nil
 	}
 	return "", errors.New(msg)
+}
+
+func (s *ServerComponentImpl) WithContext(ctx context.Context) string {
+	return "ok"
 }

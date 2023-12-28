@@ -1,6 +1,7 @@
-package unittest
+package http
 
 import (
+	"context"
 	"github.com/go-kid/remote-ioc/defination"
 	"time"
 )
@@ -108,4 +109,12 @@ func (s *ServerComponentInvoker) AddTimePtr(t1 *time.Time, duration *time.Durati
 func (s *ServerComponentInvoker) ConvertError(msg string) (string, error) {
 	anies, err := s.Invoke("ConvertError", msg)
 	return anies[0].(string), err
+}
+
+func (s *ServerComponentInvoker) WithContext(ctx context.Context) string {
+	anies, err := s.Invoke("WithContext", ctx)
+	if err != nil {
+		panic(err)
+	}
+	return anies[0].(string)
 }
