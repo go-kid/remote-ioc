@@ -130,6 +130,9 @@ func (s *serviceComponent) exportHandler(c echo.Context, method reflect.Method) 
 		if err != nil {
 			return c.JSON(400, err)
 		}
+		if p.Kind == "context.Context" {
+			p.Value = c.Request().Context()
+		}
 		values[p.Order], err = transmission.DecryptParam(p, in, s.dsFilters)
 		if err != nil {
 			return c.JSON(400, err)

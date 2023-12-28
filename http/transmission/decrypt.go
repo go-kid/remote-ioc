@@ -49,7 +49,7 @@ var defaultDeserializationFilters = []DeserializationFilter{
 var defaultContextDeserializationFilter DeserializationFilter = func(p *dto.Param, inType reflect.Type) (val reflect.Value, ok bool, err error) {
 	ok = p.Kind == "context.Context"
 	if ok {
-		val = reflect.ValueOf(context.Background())
+		val = reflect.ValueOf(fas.TernaryOp(p.Value == nil, context.Background(), p.Value.(context.Context)))
 		ok = true
 	}
 	return
@@ -63,7 +63,6 @@ var defaultErrorDeserializationFilter DeserializationFilter = func(p *dto.Param,
 	if p.Value == nil {
 		val = reflect.New(inType).Elem()
 	} else if s, ok := p.Value.(string); ok {
-		//val = reflect.ValueOf(errors.New(s))
 		err = errors.New(s)
 	} else {
 		err = errors.New(": value is not a string")
